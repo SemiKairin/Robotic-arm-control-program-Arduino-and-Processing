@@ -1,0 +1,161 @@
+#include <Wire.h>
+#include <Adafruit_PWMServoDriver.h>
+#include <SoftwareSerial.h> // Добавляем библиотеку SoftwareSerial
+
+// Если отправляет print (отправка символа) - ASCII_CONVERT должен быть '0'
+// (переводит символы даты в цифры)
+// Если отправляет write (отправка чистого байта) - ASCII_CONVERT должен быть просто 0
+#define ASCII_CONVERT '0'
+#define SERVONUM 4
+#define SERVO_FREQ 50
+
+// Пины для HC-05 (RX, TX)
+SoftwareSerial BTSerial(10, 11); // RX -> пин 10, TX -> пин 11
+
+Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
+
+int angleIn = 90;
+int angleMin[] = {0, 0, 0, 0};  // Минимальные углы
+int angleMax[] = {180, 270, 180, 180}; // Максимальные углы
+int ServoMin[] = {145, 102, 145, 145}; // Минимальная ширина импульсов
+int ServoMax[] = {465, 512, 465, 465}; // Максимальная ширина импульсов
+
+int command = 0;
+int currentAngle[SERVONUM] = {90, 90, 90, 90}; // Текущие углы поворота
+int targetAngle[] = {0, 0, 0, 0}; // Желаемые углы поворота
+int pulse[] = {0, 0, 0, 0}; // Подаваемая ширина импульса
+int angleDif; // Разница между желаемым и текущим углом сервопривода
+int iter; //Количество итераций необходимое для поворота всех сервоприводов
+
+void setup() {
+  Serial.begin(9600); // Скорость для отладки через Serial Monitor
+  BTSerial.begin(9600); // Скорость для связи с HC-05
+  pwm.begin();
+  pwm.setOscillatorFrequency(27000000);
+  pwm.setPWMFreq(SERVO_FREQ);
+}
+
+void loop() {
+  if (commandRecieved()) {
+    switch (command) {  
+      case 0:   
+        InitialPosition_Start();
+        for(int i = 0; i < SERVONUM; i++){
+          currentAngle[i] = angleIn;
+        }
+        break;
+      case 1:   
+        MoveToAngle(currentAngle, targetAngle);
+        break;
+      case 2:   
+        InitialPosition_End(currentAngle);
+        break;
+    }
+  }
+}
+
+// Перемещение сервоприводов на указанные углы
+void MoveToAngle(int currentAngle[SERVONUM], int targetAngle[SERVONUM]){
+  for (int i = 0; i < SERVONUM; i++){
+    angleDif = abs(targetAngle[i] - currentAngle[i]);
+    if(angleDif > iter) iter = angleDif;
+  }
+  for (int j = 0; j < iter; j++){
+    for (int i = 0; i < SERVONUM; i++){
+      if (currentAngle[i] != targetAngle[i]){
+        if (currentAngle[i] < targetAngle[i]) currentAngle[i] += 1;
+        else currentAngle[i] -= 1;
+        pulse[i] = map(currentAngle[i], angleMin[i], angleMax[i], ServoMin[i], ServoMax[i]);
+        pwm.setPWM(i, 0, pulse[i]);
+    }
+  }
+  delay(20);
+  }
+}
+
+// Пермещение серрвоприводов в начальные углы в момент запуска программы
+void InitialPosition_Start(){
+  pwm.wakeup();
+  for (int i = 0; i < SERVONUM; i++){
+    pulse[i] = map(angleIn, angleMin[i], angleMax[i], ServoMin[i], ServoMax[i]);
+  }
+  pwm.setPWM(1, 0, pulse[1]);
+  delay(1000);
+  pwm.setPWM(0, 0, pulse[0]);
+  delay(1000);
+  pwm.setPWM(2, 0, pulse[2]);
+  delay(1000);
+  pwm.setPWM(3, 0, pulse[3]);
+}
+
+// Перемещение сервоприводов в конечное положение с выключением драйвера
+void InitialPosition_End(int currentAngle[SERVONUM]){
+  for (int i = 0; i < SERVONUM; i++){
+    angleDif = abs(angleIn - currentAngle[i]);
+    if(angleDif > iter) iter = angleDif;
+  }
+  for (int j = 0; j < iter; j++){
+    for (int i = 0; i < SERVONUM; i++){
+      if (currentAngle[i] != angleIn){
+        if (currentAngle[i] < angleIn) currentAngle[i] += 1;
+        else currentAngle[i] -= 1;
+        pulse[i] = map(currentAngle[i], angleMin[i], angleMax[i], ServoMin[i], ServoMax[i]);
+        pwm.setPWM(i, 0, pulse[i]);
+    }
+  }
+  delay(20);
+  }
+  delay(1000);
+  pwm.sleep();
+}
+
+// Протокол принятия сообщений определённого вида от внешнего устройства
+int commandRecieved() {
+  static bool parseStart = false;
+  static byte counter = 0;
+  static int tempFirst = 0; // Временное хранение кода команды
+
+  if (BTSerial.available()) {
+    char in = BTSerial.read();    
+    // Отладочный вывод для проверки входящих символов
+    // Serial.print("Received: ");
+    // Serial.println(in);
+
+    if (in == '\n' || in == '\r') return 0; // Игнорирование перевода строки    
+    
+    else if (in == ';') {        // Завершение пакета
+      parseStart = false;
+      tempFirst = 0;
+      return counter;
+    }
+    
+    else if (in == '$') {        // Начало пакета
+      parseStart = true;
+      for (int i = 0; i < SERVONUM; i++) {
+        targetAngle[i] = 0;
+      }
+      counter = 0;
+      command = 0;
+      tempFirst = 0;
+      return 0;
+    }
+    
+    else if (parseStart && in == ',') {
+      if (counter == 0) {   // При первой запятой сохраняем первое число (код команды)
+        command = tempFirst;
+        tempFirst = 0;
+      } 
+      counter++;
+      if (counter > SERVONUM) counter = SERVONUM; // Защита от выхода счётчика за пределы
+    }
+    
+    else if (parseStart && counter <= SERVONUM) { // Чтение сообщения
+      if (counter == 0) { 
+        tempFirst = tempFirst * 10 + (in - ASCII_CONVERT);
+      } else if (counter <= SERVONUM) {
+        targetAngle[counter - 1] = targetAngle[counter - 1] * 10 + (in - ASCII_CONVERT);
+      }
+    }
+  }
+  return 0;
+}
