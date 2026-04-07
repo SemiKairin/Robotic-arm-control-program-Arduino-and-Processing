@@ -1,0 +1,386 @@
+import processing.serial.*;
+import controlP5.*;
+
+Serial serial;
+ControlP5 cp5;
+
+int speed = 9600;                        // Скорость коммуникации
+String portName;                         // Имя порта
+int SERVONUM = 4;                        // Количество сервоприводов
+boolean isStarted = false;               // Начата ли работа руки
+String keyMessage = "$";                 // Ключ начала чтения сообщения по умолчанию
+int command;                             // Индекс команды
+String data = "";                        // Параметры управления
+int angles[] = {90, 90, 90, 90};         // Начальные углы сервоприводов
+int anglesMin[] = {15, 90, 90, 60};      // Минимальные углы
+int anglesMax[] = {170, 180, 180, 165};  // Максимальные углы
+Textlabel anglesWarning;                 // Предупреждение о неверно введённых углах
+String angleWarning = "";
+
+
+
+void setup() {
+  size(900, 600);                  // Размер окна
+  setupGUI();                      // Инициализация интерфейса
+  hideControls();
+}
+
+void draw() {
+  background(220);
+}
+
+
+// Функция для отправки сообщения на Ардуино
+void sendPacket(String keyMessageS, int commandS, String dataS) {
+  if (serial != null) serial.write(keyMessageS + str(commandS) + dataS + ';');
+  // отправит "keyMessage"+"command,data;"
+  data = "";
+}
+
+
+
+
+// ======= ИНИЦИАЛИЗАЦИЯ ИНТЕРФЕЙСА ========
+void setupGUI() {
+  cp5 = new ControlP5(this);
+  cp5.setFont(createFont("Times New Roman", 16));  // Установка шрифта
+  
+  // Создание вкладок команд
+  cp5.addTab("commandsTab")
+    .setColorBackground(color(0, 160, 100))
+    .setColorLabel(color(255))
+    //.setColorActive(color(#00EA54))
+    .setHeight(30)
+    .setLabel("Команды")
+  ;
+  
+  cp5.getTab("default")
+    .setHeight(30)
+    .setLabel("Ручное управление")
+  ;
+  
+  // Кнопки запуска и выключения
+  cp5.addButton("startControl")
+    .setSize(150, 50)
+    .setPosition(375, 275)
+    .setFont(createFont("Times New Roman", 28))
+    .setLabel("Запуск")
+    .setColorBackground(#1EA23D)
+    .moveTo("global")
+    .hide()
+  ;
+  
+  cp5.addButton("turnOff")
+    .setSize(300, 40)
+    .setPosition(575, 535)
+    .setFont(createFont("Times New Roman", 28))
+    .setLabel("Выключение")
+    .setColorBackground(#FF0000)
+    .moveTo("global")
+  ;
+
+  // Список доступных портов
+  cp5.addScrollableList("com")
+    .setPosition(610, 0)
+    .setSize(80, 180)
+    .setBarHeight(30)
+    .setItemHeight(30)
+    .close()
+    .addItems(Serial.list())
+    .moveTo("global")
+  ;
+
+  // Кнопки открытия и закрытия порта  
+  cp5.addButton("openPort")
+    .setPosition(690, 0)
+    .setSize(80, 30)
+    .setLabel("открыть")
+    .moveTo("global")
+  ;
+    
+  cp5.addButton("closePort")
+    .setPosition(770, 0)
+    .setSize(80, 30)
+    .setLabel("закрыть")
+    .moveTo("global")
+  ;
+  
+  // Текстовые поля подписи для ручной задачи угла поворота сервоприводов
+  cp5.addTextfield("servo0")
+    .setPosition(25, 70)
+    .setSize(150, 30)
+    .setLabel("")
+    .setFont(createFont("Times New Roman", 20))
+    .setInputFilter(ControlP5.INTEGER)
+    .setColorLabel(0)
+    .setAutoClear(false)
+  ;
+  
+  cp5.addLabel("servo0l")
+    .setPosition(25, 50)
+    .setText("Серво 1 (15-170)")
+    .setColor(0)
+  ;
+  
+  cp5.addTextfield("servo1")
+    .setPosition(25, 130)
+    .setSize(150, 30)
+    .setLabel("")
+    .setFont(createFont("Times New Roman", 20))
+    .setInputFilter(ControlP5.INTEGER)
+    .setColorLabel(0)
+    .setAutoClear(false)
+  ;
+  
+  cp5.addLabel("servo1l")
+    .setPosition(25, 110)
+    .setText("Серво 2 (90-180)")
+    .setColor(0)
+  ;
+  
+  cp5.addTextfield("servo2")
+    .setPosition(25, 190)
+    .setSize(150, 30)
+    .setLabel("")
+    .setFont(createFont("Times New Roman", 20))
+    .setInputFilter(ControlP5.INTEGER)
+    .setColorLabel(0)
+    .setAutoClear(false)
+  ;
+  
+  cp5.addLabel("servo2l")
+    .setPosition(25, 170)
+    .setText("Серво 3 (90-180)")
+    .setColor(0)
+  ;
+  
+  cp5.addTextfield("servo3")
+    .setPosition(25, 250)
+    .setSize(150, 30)
+    .setLabel("")
+    .setFont(createFont("Times New Roman", 20))
+    .setInputFilter(ControlP5.INTEGER)
+    .setColorLabel(0)
+    .setAutoClear(false)
+  ;
+  
+  cp5.addLabel("servo3l")
+    .setPosition(25, 230)
+    .setText("Серво 4 (60-165)")
+    .setColor(0)
+  ;
+  
+  //Кнопка отправки записанных значений углов поворота
+  cp5.addButton("sendAngles")
+    .setPosition(25, 290)
+    .setSize(100, 30)
+    .setLabel("Отправить")
+  ;
+  
+  //Надпись с предупреждением о вводе неверных углов
+  anglesWarning = cp5.addTextlabel("anglesWarning")
+    .setPosition(25, 330)
+    .setText("")
+    .setWidth(100)
+    .setColor(#FF0000)
+  ;
+  
+  // Кнопки для режима команд
+  cp5.addButton("moveForward")
+    .setPosition(25, 50)
+    .setSize(150,60)
+    .setLabel("Выпрямить руку\nвперёд")
+    .moveTo("commandsTab")
+  ;
+  
+  cp5.addButton("moveDown")
+    .setPosition(25, 130)
+    .setSize(150,40)
+    .setLabel("Опустить руку")
+    .moveTo("commandsTab")
+  ;
+  
+  cp5.addButton("bendElbow")
+    .setPosition(25, 190)
+    .setSize(150,40)
+    .setLabel("Согнуть локоть")
+    .moveTo("commandsTab")
+  ;
+  
+  cp5.addButton("squeeseHand")
+    .setPosition(25, 250)
+    .setSize(150,40)
+    .setLabel("Сжать руку")
+    .moveTo("commandsTab")
+  ;
+
+  //cp5.addButton("moveRight")
+  //  .setPosition(25, 310)
+  //  .setSize(150,60)
+  //  .setLabel("Выпрямить руку\nнаправо")
+  //  .moveTo("commandsTab")
+  //;
+}
+
+
+
+
+// ==== ОБРАБОТКА ИНТЕРФЕЙСА =====
+// Список портов
+void com(int n) {
+  portName = Serial.list()[n];  // Запоминаем выбранный порт в portName
+}
+
+// Кнопка открытия порта
+void openPort() {
+  if (portName != null && serial == null) {     // Если выбран порт и сейчас он закрыт,
+    serial = new Serial(this, portName, speed); // открываем portName.
+    if (isStarted == false){                    // Переключение видимости элементов интерфейса при запуске
+      cp5.getController("startControl").show();
+    }
+    else {
+      showControls();
+    }
+  }
+}
+
+// Кнопка закрытия порт
+void closePort() {
+  if (serial != null) { // Если порт открыт,
+    serial.stop();      // закрываем portName,
+    serial = null;      // serial выключен
+    hideControls();
+    cp5.getController("startControl").hide();
+  }
+}
+
+// Отображение управления и переход механизма в начальное положение
+void startControl(){
+  showControls();
+  isStarted = true;
+  command = 0;
+  data = ",0";
+  sendPacket(keyMessage, command, data);
+  cp5.getController("startControl").hide();
+}
+
+// Скрытие управления и переход механизма в конечное положение с выключением
+void turnOff(){
+  hideControls();
+  isStarted = false;
+  command = 2;
+  data = ",0";
+  sendPacket(keyMessage, command, data);
+  cp5.getController("startControl").show();
+}
+
+//Отправка значений углов сервоприводов
+void sendAngles() {
+  for (int i = 0; i < SERVONUM; i++) {
+    angles[i] = int((cp5.get(Textfield.class, "servo" + str(i)).getText()));
+    if (angles[i] > anglesMax[i] || angles[i] < anglesMin[i]) {               // Проверка на выход прописанных значений углов за допустимые пределы и подготовка предупреждения
+      angleWarning = angleWarning + " " + str(i+1);
+    }
+    else {                                                                    // При корректно введённых значениях подготовка сообщения с параметрами управления
+      data = data + "," + str(angles[i]);
+    }
+  }
+  if (angleWarning != "") {                                                   // При наличии введённых значений вне допустимых пределов, показывается сообщение с предупреждением
+    anglesWarning.setText("Введены неверные значения" + "\n" + "углов для сервоприводов " + angleWarning + '!');
+    angleWarning = "";
+    data = "";
+  }
+  else {                                                                      // При отсутствии введённых значений вне допустимых пределов, отправка сообщения с параметрами на Arduino
+    keyMessage = "$";
+    command = 1;
+    sendPacket(keyMessage, command, data);
+    anglesWarning.setText("");
+  }
+}
+
+// Реализация команд
+void moveForward() {
+  angles[0] = 90;
+  angles[1] = 180;
+  angles[2] = 90;
+  angles[3] = 90;
+  for (int i = 0; i < SERVONUM; i++) {
+    data = data + "," + str(angles[i]);
+  }
+  keyMessage = "$";
+  command = 1;
+  sendPacket(keyMessage, command, data);
+}
+
+void moveDown() {
+  angles[0] = 90;
+  angles[1] = 90;
+  angles[2] = 90;
+  angles[3] = 90;
+  for (int i = 0; i < SERVONUM; i++) {
+    data = data + "," + str(angles[i]);
+  }
+  keyMessage = "$";
+  command = 1;
+  sendPacket(keyMessage, command, data);
+}
+
+void bendElbow() {
+  angles[2] = 180;
+  for (int i = 0; i < SERVONUM; i++) {
+    data = data + "," + str(angles[i]);
+  }
+  keyMessage = "$";
+  command = 1;
+  sendPacket(keyMessage, command, data);
+}
+
+void squeeseHand() {
+  angles[3] = 165;
+  for (int i = 0; i < SERVONUM; i++) {
+    data = data + "," + str(angles[i]);
+  }
+  keyMessage = "$";
+  command = 1;
+  sendPacket(keyMessage, command, data);
+}
+
+//void moveRight() {
+//  angles[0] = 170;
+//  angles[1] = 180;
+//  angles[2] = 90;
+//  angles[3] = 90;
+//  for (int i = 0; i < SERVONUM; i++) {
+//    data = data + "," + str(angles[i]);
+//  }
+//  keyMessage = "$";
+//  command = 1;
+//  sendPacket(keyMessage, command, data);
+//}
+
+
+
+
+
+// ==== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====
+// Скрытие управления
+void hideControls() {
+  cp5.getTab("default").hide();
+  cp5.getTab("commandsTab").hide();
+  cp5.getController("turnOff").hide();
+  anglesWarning.setText("");
+}
+
+// Появление управления
+void showControls() {
+  cp5.getTab("default").show();
+  cp5.getTab("commandsTab").show();
+  cp5.getController("turnOff").show();
+}
+
+// При закрытии приложения срабатывает переход механизма в конечное положение с выключением
+void exit() {
+  if(isStarted) turnOff();
+  closePort();
+  super.exit();
+}
